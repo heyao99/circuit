@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create a Lambda function from an ECR image with a function URL
+
+Parameters:
+  ECRRepoName:
+    Type: String
+    Description: The name of the ECR repository
+    Default: circuitscan_server
+  ECRImageTag:
+    Type: String
+    Description: The tag of the ECR image
+    Default: latest
+  AssocBucket:
+    Type: String
+    Description: Public S3 Bucket in which to store package/address associations (Must already have been created using artifact-stack.yaml)
+    Default: circuitscan-artifacts
+  MaxNewest:
+    Type: String
+    Description: Maximum number of verifiers to keep in latest.json
+    Default: 100
+  BlobUrl:
+    Type: String
+    Description: Where compilation artifacts are stored
+    Default: https://circuitscan-artifacts.s3.us-west-2.amazonaws.com/
+  APIKeyBucketName:
+    Description: Name of the new private S3 bucket (Will be created)
+    Type: String
+    Default: circuitscan-apikeys
+  RecaptchaSecretKey:
+    Description: Value provided by Google Recaptcha admin console (for api key creation)
+    Type: String
+  P0tionAwsRegion:
+    Description: From DefinitelySetup prod config
+    Type: String
+    Default: eu-central-1
+  P0tionBucketPostfix:
+    Description: From DefinitelySetup prod config
+    Type: String
+    Default: -pse-p0tion-production
+  P0tionFirebaseApiKey:
+    Description: From DefinitelySetup prod config
+    Type: String
+    Default: AIzaSyC_m2yETFfuJ_dO5mtQfyU6qlc8k3CTFUY
+  P0tionFirebaseAuthDomain:
+    Description: From DefinitelySetup prod config
+    Type: String
+    Default: pse-p0tion-production.firebaseapp.com
+  P0tionFirebaseProjectId:
+    Description: From DefinitelySetup prod config
+    Type: String
+    Default: pse-p0tion-production
+  P0tionFirebaseMessagingSenderId:
+    Description: From DefinitelySetup prod config
+    Type: String
+    Default: "791425100143"
+  P0tionFirebaseAppId:
+    Description: From DefinitelySetup prod config
+    Type: String
+    Default: "1:791425100143:web:86313c4d311c8f6014a09a"
+
+Resources:
+  APIKeyS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref APIKeyBucketName
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: "LambdaExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "ec2:TerminateInstances"
+                  - "ec2:DescribeInstances"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "s3:*"
+                Resource:
+                  - !Sub arn:aws:s3:::${APIKeyBucketName}/*
+                  - !Sub arn:aws:s3:::${APIKeyBucketName}
+                  - !Sub arn:aws:s3:::${AssocBucket}/*
+                  - !Sub arn:aws:s3:::${AssocBucket}
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-lambda-function"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Image
+      Code:
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}:${ECRImageTag}"
+      MemorySize: 256
+      Timeout: 90
+      Environment:
+        Variables:
+          ASSOC_BUCKET: !Ref AssocBucket
+          MAX_NEWEST: !Ref MaxNewest
+          BLOB_URL: !Ref BlobUrl
+          APIKEY_BUCKET: !Ref APIKeyBucketName
+          RECAPTCHA_SECRET_KEY: !Ref RecaptchaSecretKey
+          P0TION_AWS_REGION: !Ref P0tionAwsRegion
+          P0TION_CONFIG_CEREMONY_BUCKET_POSTFIX: !Ref P0tionBucketPostfix
+          P0TION_FIREBASE_API_KEY: !Ref P0tionFirebaseApiKey
+          P0TION_FIREBASE_AUTH_DOMAIN: !Ref P0tionFirebaseAuthDomain
+          P0TION_FIREBASE_PROJECT_ID: !Ref P0tionFirebaseProjectId
+          P0TION_FIREBASE_MESSAGING_SENDER_ID: !Ref P0tionFirebaseMessagingSenderId
+          P0TION_FIREBASE_APP_ID: !Ref P0tionFirebaseAppId
+
+  LambdaFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      TargetFunctionArn: !GetAtt LambdaFunction.Arn
+      Cors:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - "*"
+        AllowHeaders:
+          - "*"
+
+  LambdaFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunctionUrl"
+      FunctionName: !Ref LambdaFunction
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  LambdaFunctionSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: 'rate(60 minutes)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt LambdaFunction.Arn
+          Id: "LambdaFunctionTarget"
+      Name: LambdaFunctionSchedule
+
+  PermissionForEventsToInvokeMainLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt LambdaFunctionSchedule.Arn
+
+  NewestAggregateLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-newest-aggregate-lambda-function"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 192
+      Timeout: 30
+      Handler: 'index.handler'
+      Runtime: 'nodejs20.x'
+      Environment:
+        Variables:
+          ASSOC_BUCKET: !Ref AssocBucket
+          MAX_NEWEST: !Ref MaxNewest
+          BLOB_URL: !Ref BlobUrl
+      Code:
+        ZipFile: |
+          const {
+            S3Client,
+            PutObjectCommand,
+            ListObjectsV2Command,
+            DeleteObjectsCommand,
+          } = require('@aws-sdk/client-s3');
+
+          const s3Client = new S3Client({ region: process.env.AWS_REGION });
+          exports.handler = async (event) => {
+            const result = await fetch(process.env.BLOB_URL + 'latest.json');
+            const data = await result.json();
+
+            const queue = await s3Client.send(new ListObjectsV2Command({
+              Bucket: process.env.ASSOC_BUCKET,
+              Prefix: 'latest-queue/',
+            }));
+            if(!queue.KeyCount) return {
+              statusCode: 200,
+              body: JSON.stringify({
+                status: 'no-change',
+              }),
+            };
+
+            const newItems = await Promise.all(queue.Contents.map(item =>
+              fetch(process.env.BLOB_URL + item.Key).then(result => result.json())));
+
+            const newList = [...newItems, ...data.list]
+              .sort((a, b) => a.createdAt - b.createdAt)
+              .slice(-parseInt(process.env.MAX_NEWEST, 10));
+
+            await s3Client.send(new PutObjectCommand({
+              Bucket: process.env.ASSOC_BUCKET,
+              Key:`latest.json`,
+              ContentType: 'application/json',
+              Body: JSON.stringify({
+                list: newList,
+              }),
+            }));
+
+            await s3Client.send(new DeleteObjectsCommand({
+              Bucket: process.env.ASSOC_BUCKET,
+              Delete: {
+                Objects: queue.Contents.map(item => ({ Key: item.Key })),
+              },
+            }));
+
+            return {
+              statusCode: 200,
+              body: JSON.stringify({
+                status: 'ok',
+              }),
+            };
+          };
+
+  NewestAggregateLambdaFunctionSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: 'rate(1 minute)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt NewestAggregateLambdaFunction.Arn
+          Id: "NewestAggregateLambdaFunctionTarget"
+      Name: NewestAggregateLambdaFunctionSchedule
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref NewestAggregateLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt NewestAggregateLambdaFunctionSchedule.Arn
+
+Outputs:
+  LambdaFunctionUrl:
+    Description: The URL of the Lambda function
+    Value: !GetAtt LambdaFunctionUrl.FunctionUrl
+

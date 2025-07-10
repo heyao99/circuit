@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+:root {
+  --prism-bg: #f5f2f0;
+  --prism-color: #000000;
+  --prism-text-shadow: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --prism-bg: #2d2d2d;
+    --prism-color: #ccc;
+    --prism-text-shadow: #000;
+  }
+}
+
+/* Prism.js styles */
+code[class*="language-"],
+pre[class*="language-"] {
+  background: var(--prism-bg);
+  color: var(--prism-color);
+  text-shadow: var(--prism-text-shadow);
+}
+
+code .token.operator {
+  background: none;
+}
+@media (prefers-color-scheme: dark) {
+  .MuiChartsAxis-line,
+  .MuiChartsAxis-tick {
+    stroke: #eee !important;
+  }
+  .MuiChartsAxis-tickLabel {
+    fill: #eee !important;
+  }
+}
+
+
+
+#logo {
+  background-image: url(images/logo-light.png);
+  background-repeat: no-repeat;
+  background-position: 10px center;
+  background-size: auto 75%;
+}
+@media (prefers-color-scheme: dark) {
+#logo {
+  background-image: url(images/logo-dark.png);
+}}
+
+details[open]>summary>svg {
+  transform: rotate(180deg);
+}
